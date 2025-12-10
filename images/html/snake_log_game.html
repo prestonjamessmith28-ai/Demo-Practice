@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Rustic Snake — Reliable Version</title>
+<style>
+  html,body { height:100%; margin:0; }
+  body{
+    background-image: url("rustic_bg.png");
+    background-size: cover;
+    background-position: center;
+    font-family: "Merriweather", serif;
+    color:#f5e6c8;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    padding:20px;
+    box-sizing:border-box;
+  }
+  h1 { margin: 8px 0 0; text-shadow: 1px 1px 2px rgba(0,0,0,0.4); }
+  #gameContainer {
+    background: rgba(58,40,18,0.78);
+    border: 3px solid #3b2614;
+    padding: 18px;
+    border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+    margin-top:18px;
+  }
+  #gameCanvas { display:block; background:#efe6d8; border-radius:8px; }
+  .controls { display:flex; gap:10px; align-items:center; justify-content:center; margin-top:10px; }
+  button {
+    background:#8b5a2b; color:#f5e6c8; border:2px solid #4b2b12; padding:8px 14px; border-radius:8px; cursor:pointer;
+    font-weight:700; font-family:inherit;
+  }
+  #scoreBox { color:#f5e6c8; margin-left:10px; font-weight:700; }
+  @media (max-width:520px) { #gameContainer { width: 92vw } }
+</style>
+</head>
+<body>
+
+<h1>Rustic Snake</h1>
+
+<div id="gameContainer">
+  <!-- fixed CSS size for simplicity -->
+  <canvas id="gameCanvas" width="600" height="600" aria-label="Rustic Snake canvas"></canvas>
+
+  <div class="controls">
+    <button id="startBtn">Start</button>
+    <button id="pauseBtn">Pause</button>
+    <button id="resetBtn">Reset</button>
+    <div id="scoreBox">Score: <span id="score">0</span></div>
+  </div>
+</div>
+
+<script>
+/* ---------------- SIMPLE, ROBUST SNAKE ---------------- */
+
+/* Config */
+const TILE_COUNT = 20;
+const CANVAS_CSS_PX = 600;         // CSS px width/height
+const MOVE_INTERVAL_MS = 120;      // snake move interval
+const LOG_TELEPORT_SECONDS = 5;    // seconds until log teleports
+
+/* Canvas & drawing setup (simple DPR handling) */
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// Set CSS display size (keep canvas element width/height attributes for internal resolution)
+canvas.style.width = CANVAS_CSS_PX + 'px';
+canvas.style.height = CANVAS_CSS_PX + 'px';
+
+// Handle devicePixelRatio for sharpness:
+const DPR = window.devicePixelRatio || 1;
+canvas.width = CANVAS_CSS_PX * DPR;
+canvas.height = CANVAS_CSS_PX * DPR;
+// scale so we draw in CSS pixels
+ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+
+const tileSize = CANVAS_CSS_PX / TILE_COUNT;
+
+/* Game state */
+let snake = [{ x: 10, y: 10 }];  // coordinates in grid cells
+let dir = { x: 0, y: 0 };        // current direction
+let nextDir = { x: 0, y: 0 };    // queued direction
+let log = { x: 5, y: 5 };
+let score = 0;
+let running = false;
+let gameOverFlag = false;
+
+/* Timers */
+let moveTimerId = null;
+let logTickCount = 0; // counts seconds toward teleport
+let logIntervalId = null;
+
+/* DOM */
+const startBtn = document.getElementById('startBtn');
+const pauseBtn = document.getElementById('pauseBtn');
+const resetBtn = document.getElementById('resetBtn');
+const scoreSpan = document.getElementById('score');
+
+/* Helpers */
+function randCellNotOnSnake() {
+  for (let i = 0; i < 1000; i++) {
+    const p = { x: Math.floor(Math.random() * TILE_COUNT), y: Math.floor(Math.random() * TILE_COUNT) };
+    if (!snake.some(s => s.x === p.x && s.y === p.y)) return p;
+  }
+  return { x: 0, y: 0 };
+}
+function placeLog() {
+  log = randCellNotOnSnake();
+  logTickCount = 0;
+  // immediate redraw so user sees new log
+  draw();
+}
+
+/* Controls: arrow keys and WASD */
+window.addEventListener('keydown', (e) => {
+  if (gameOverFlag) return; // ignore inputs on game over until reset
+  const k = e.key;
+  if (k === 'ArrowUp' || k === 'w' || k === 'W') { if (dir.y !== 1) nextDir = {x:0,y:-1}; e.preventDefault(); }
+  if (k === 'ArrowDown' || k === 's' || k === 'S') { if (dir.y !== -1) nextDir = {x:0,y:1}; e.preventDefault(); }
+  if (k === 'ArrowLeft' || k === 'a' || k === 'A') { if (dir.x !== 1) nextDir = {x:-1,y:0}; e.preventDefault(); }
+  if (k === 'ArrowRight' || k === 'd' || k === 'D') { if (dir.x !== -1) nextDir = {x:1,y:0}; e.preventDefault(); }
+});
+
+/* Buttons */
+startBtn.addEventListener('click', () => {
+  if (gameOverFlag) resetGame();
+  if (!running) startGame();
+});
+pauseBtn.addEventListener('click', () => {
+  if (!running) return;
+  if (moveTimerId) {
+    clearInterval(moveTimerId); moveTimerId = null;
+    pauseBtn.textContent = 'Resume';
+    running = false;
+  } else {
+    startMoveTimer();
+    pauseBtn.textContent = 'Pause';
+    running = true;
+  }
+});
+resetBtn.addEventListener('click', resetGame);
+
+/* Start/Stop helpers */
+function startGame() {
+  // if not moving, give initial direction to the right
+  if (dir.x === 0 && dir.y === 0 && nextDir.x === 0 && nextDir.y === 0) {
+    nextDir = { x: 1, y: 0 };
+  }
+  if (!moveTimerId) startMoveTimer();
+  if (!logIntervalId) startLogTimer();
+  running = true;
+  pauseBtn.textContent = 'Pause';
+}
+
+function startMoveTimer() {
+  // tick the snake at fixed interval
+  moveTimerId = setInterval(() => {
+    tickMove();
+  }, MOVE_INTERVAL_MS);
+}
+
+function startLogTimer() {
+  // every 1 second increment counter; after LOG_TELEPORT_SECONDS teleport
+  logIntervalId = setInterval(() => {
+    logTickCount++;
+    if (logTickCount >= LOG_TELEPORT_SECONDS) {
+      placeLog();
+    }
+  }, 1000);
+}
+
+function stopTimers() {
+  if (moveTimerId) { clearInterval(moveTimerId); moveTimerId = null; }
+  if (logIntervalId)  { clearInterval(logIntervalId); logIntervalId = null; }
+}
+
+/* Game logic tick (movement + collisions) */
+function tickMove() {
+  if (gameOverFlag) return;
+
+  // apply queued direction unless it's direct reverse
+  if (!(nextDir.x === -dir.x && nextDir.y === -dir.y)) {
+    // when snake length == 1 allow any dir
+    if (!(snake.length > 1 && nextDir.x === -dir.x && nextDir.y === -dir.y)) {
+      dir = {...nextDir};
+    }
+  }
+
+  // if dir is zero (not moving) do nothing
+  if (dir.x === 0 && dir.y === 0) {
+    draw(); // still draw to reflect UI
+    return;
+  }
+
+  const head = { x: snake[0].x + dir.x, y: snake[0].y + dir.y };
+
+  // wrap-around
+  head.x = (head.x + TILE_COUNT) % TILE_COUNT;
+  head.y = (head.y + TILE_COUNT) % TILE_COUNT;
+
+  // collision with body
+  if (snake.some(seg => seg.x === head.x && seg.y === head.y)) {
+    doGameOver();
+    return;
+  }
+
+  snake.unshift(head);
+
+  // eating log?
+  if (head.x === log.x && head.y === log.y) {
+    score += 1;
+    scoreSpan.textContent = score;
+    placeLog();
+  } else {
+    // normal move - remove tail
+    snake.pop();
+  }
+
+  // redraw
+  draw();
+}
+
+/* Draw helpers */
+function clearBoard() {
+  ctx.clearRect(0,0,canvas.width/DPR, canvas.height/DPR); // use CSS pixels after transform
+}
+function drawGridBackground() {
+  // big cream board
+  ctx.fillStyle = '#efe6d8';
+  ctx.fillRect(0,0, CANVAS_CSS_PX, CANVAS_CSS_PX);
+}
+
+/* Draw cartoon log (fruit) */
+function drawLog() {
+  const px = log.x * tileSize;
+  const py = log.y * tileSize;
+  ctx.save();
+  ctx.translate(px, py);
+
+  // rounded rectangle log body
+  const w = tileSize - 8;
+  const h = tileSize - 12;
+  ctx.fillStyle = '#8b5a2b';
+  roundRect(ctx, 4, 6, w, h, Math.max(2, tileSize*0.08), true, true);
+
+  ctx.strokeStyle = '#4b2b12';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(4,6,w,h);
+
+  // rings
+  ctx.fillStyle = '#d8b48a';
+  ctx.beginPath();
+  ctx.ellipse(4 + w*0.5, 6 + h*0.5, w*0.22, h*0.22, 0, 0, Math.PI*2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+/* Draw snake: trailing logs + head */
+function drawSnake() {
+  // trailing logs
+  for (let i = snake.length - 1; i >= 1; i--) {
+    const seg = snake[i];
+    const px = seg.x * tileSize;
+    const py = seg.y * tileSize;
+    ctx.fillStyle = '#a97444';
+    ctx.fillRect(px + 4, py + 6, tileSize - 8, tileSize - 12);
+    ctx.strokeStyle = '#4b2b12';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(px + 4, py + 6, tileSize - 8, tileSize - 12);
+  }
+
+  // head
+  const h = snake[0];
+  const hx = h.x * tileSize;
+  const hy = h.y * tileSize;
+  ctx.fillStyle = '#8c4f2a';
+  ctx.fillRect(hx + 2, hy + 2, tileSize - 4, tileSize - 4);
+
+  // eyes
+  ctx.fillStyle = '#2b1a12';
+  const eye = Math.max(1, Math.floor(tileSize * 0.06));
+  ctx.fillRect(hx + tileSize*0.28, hy + tileSize*0.35, eye, eye);
+  ctx.fillRect(hx + tileSize*0.62, hy + tileSize*0.35, eye, eye);
+}
+
+/* draw everything */
+function draw() {
+  clearBoard();
+  drawGridBackground();
+  drawLog();
+  drawSnake();
+}
+
+/* Game over routine */
+function doGameOver() {
+  stopTimers();
+  running = false;
+  gameOverFlag = true;
+
+  // overlay
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.fillRect(0,0, CANVAS_CSS_PX, CANVAS_CSS_PX);
+
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 36px Merriweather, serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('Game Over', CANVAS_CSS_PX/2, CANVAS_CSS_PX/2 - 8);
+  ctx.font = '16px Merriweather, serif';
+  ctx.fillText('Click Reset to play again', CANVAS_CSS_PX/2, CANVAS_CSS_PX/2 + 20);
+}
+
+/* Reset */
+function resetGame() {
+  stopTimers();
+  snake = [{ x: 10, y: 10 }];
+  dir = { x: 0, y: 0 };
+  nextDir = { x: 0, y: 0 };
+  log = { x: 5, y: 5 };
+  score = 0;
+  scoreSpan.textContent = score;
+  running = false;
+  gameOverFlag = false;
+  logTickCount = 0;
+  draw();
+}
+
+/* Utility: roundRect */
+function roundRect(ctx, x, y, w, h, r, fill, stroke) {
+  if (typeof r === 'undefined') r = 5;
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+  if (fill) ctx.fill();
+  if (stroke) ctx.stroke();
+}
+
+/* Startup: initial draw and ensure everything ready */
+(function startup(){
+  // compute tileSize variable (CSS pixels)
+  // already computed above as const tileSize, but ensure defined:
+  // (tileSize = CANVAS_CSS_PX / TILE_COUNT) -- defined earlier via const
+  placeLog();
+  draw(); // initial render
+})();
+
+</script>
+</body>
+</html>

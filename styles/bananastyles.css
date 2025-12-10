@@ -1,0 +1,55 @@
+.common{
+    background-color: gray;
+    border: 2px solid white;
+    position: absolute;
+}
+
+
+
+.header{
+    top: 5px;
+    left: 15px;
+    right: 25px;
+    height: 100px;
+}
+
+.left{
+    top: 115px;
+    left: 15px;
+    bottom: 40px;
+    width: 100px;
+    /* height: fit-content; */
+    
+}
+
+.right{
+    top: 115px;
+    right: 25px;
+    width: 100px;
+    bottom: 40px;
+    /* height: fit-content; */
+    
+}
+.main{
+    top: 115px;
+    left: 135px;
+    right: 140px;
+    bottom: 40px;
+    height: fit-content;
+   ;
+}    
+
+.footer{
+    bottom: 5px;
+    height: 25px;
+    left: 15px;
+    right: 25px;
+    position: fixed;
+    z-index: 1;
+}
+.redtext{
+    color: red;
+}
+.purpletext{
+    color: purple;
+}
